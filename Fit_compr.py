@@ -1,3 +1,5 @@
+###Fitting experimental data to compressible hyperelastic models
+
 import numpy as np
 import sympy as sp
 import matplotlib.pyplot as plt
@@ -599,7 +601,7 @@ def fit_exp_data_NH(data):
 
 
 
-def plot_data(data_exp, data_fit):
+def plot_data(data_exp, data_fit,xlabel="x",ylabel="y"):
     """
     Plot experimental and fitted uniaxial data.
 
@@ -618,8 +620,8 @@ def plot_data(data_exp, data_fit):
 
     ax.plot(data_fit[0],data_fit[1],"-",linewidth=3,label="Fit",)
 
-    ax.set_xlabel(r"$\lambda_1$")
-    ax.set_ylabel(r"$\sigma_1$")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.legend()
 
     plt.show()
@@ -639,13 +641,23 @@ def read_exp_data(filename):
     Tcut = T[l_min_pos:lmax_pos]
     Tcut -= Tcut[0]
 
+    Lcut-=Lcut[0]
+    Fcut-=Fcut[0]
+
+    Lcut = Lcut/1000# mm to m
+    
     #return np.column_stack((Lcut, Fcut, Tcut))
+    print(f"Lcut: {Lcut[0:10]}")
+    print(f"Fcut: {Fcut[0:10]}")
+    print(f"Tcut: {Tcut[0:10]}")
     return (Lcut,Fcut,Tcut)
 
 def dimensioned_to_dimensionless(data,A0,L0):
-    # L to lambda, lambda=L/L0
+    # L to lambda, lambda=L/L0, L=L0+DeltaL
     # F to sigma, sigma=F/A0
-    return [(data[0]+L0)/L0,data[1]/A0]
+    lam = (data[0]+L0)/L0
+    sigma = data[1]/A0
+    return (lam,sigma)
 
 
 A0CYLMEAN=686.61e-6
@@ -655,14 +667,17 @@ L0RECTMEAN=25.00e-3
 
 filename1 = BASE_DIR / "txtfiles" / "COMPR1.tab"
 exp_data = read_exp_data(filename1)
-print(f"exp data: {exp_data}")
+
+#plot_data(exp_data,exp_data,xlabel=r"L,mm",ylabel=r"F,N")
+
 exp_data_dimless = dimensioned_to_dimensionless(exp_data,A0CYLMEAN,L0CYLMEAN)
-print(f"exp data dimless: {exp_data_dimless}")
+
+#plot_data(exp_data_dimless,exp_data_dimless,xlabel=r"lam,1",ylabel=r"Sigma,Pa")
+
 fit_curve = fit_exp_data_NH(exp_data_dimless)[0]
 print(f"fit curve: {fit_curve}")
 
-plot_data(exp_data_dimless,fit_curve)
-
+plot_data(exp_data_dimless,fit_curve,xlabel=r"lam,1",ylabel=r"Sigma,Pa")
 
 
 
