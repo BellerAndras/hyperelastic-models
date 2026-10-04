@@ -41,9 +41,7 @@ def fit_exp_data_OgdenN3(data):
         raise ValueError("lambda1 and sigma1 must be 1D arrays.")
 
     if len(lambda1_exp) != len(sigma1_exp):
-        raise ValueError(
-            "lambda1 and sigma1 must have the same length."
-        )
+        raise ValueError("lambda1 and sigma1 must have the same length.")
 
     if len(lambda1_exp) == 0:
         raise ValueError("Experimental data are empty.")
@@ -52,30 +50,15 @@ def fit_exp_data_OgdenN3(data):
     # Symbolic variables
     # ------------------------------------------------------------------
 
-    lam1, lam2, lam3 = sp.symbols(
-        "lam1 lam2 lam3",
-        positive=True,
-    )
+    lam1, lam2, lam3 = sp.symbols("lam1 lam2 lam3",positive=True,)
 
-    lamT = sp.symbols(
-        "lamT",
-        positive=True,
-    )
+    lamT = sp.symbols("lamT",positive=True,)
 
-    mu1, mu2, mu3 = sp.symbols(
-        "mu1 mu2 mu3",
-        positive=True,
-    )
+    mu1, mu2, mu3 = sp.symbols("mu1 mu2 mu3",positive=True,)
 
-    alpha1, alpha2, alpha3 = sp.symbols(
-        "alpha1 alpha2 alpha3",
-        positive=True,
-    )
+    alpha1, alpha2, alpha3 = sp.symbols("alpha1 alpha2 alpha3",positive=True,)
 
-    D1, D2, D3 = sp.symbols(
-        "D1 D2 D3",
-        positive=True,
-    )
+    D1, D2, D3 = sp.symbols("D1 D2 D3",positive=True,)
 
     # ------------------------------------------------------------------
     # Deformation
@@ -92,40 +75,15 @@ def fit_exp_data_OgdenN3(data):
     # ------------------------------------------------------------------
 
     W_dev = (
-        2 * mu1 / alpha1**2
-        * (
-            lam1_bar**alpha1
-            + lam2_bar**alpha1
-            + lam3_bar**alpha1
-            - 3
-        )
-        +
-        2 * mu2 / alpha2**2
-        * (
-            lam1_bar**alpha2
-            + lam2_bar**alpha2
-            + lam3_bar**alpha2
-            - 3
-        )
-        +
-        2 * mu3 / alpha3**2
-        * (
-            lam1_bar**alpha3
-            + lam2_bar**alpha3
-            + lam3_bar**alpha3
-            - 3
-        )
-    )
+         2 * mu1 / alpha1**2* (lam1_bar**alpha1+ lam2_bar**alpha1+ lam3_bar**alpha1- 3 )
+        +2 * mu2 / alpha2**2* (lam1_bar**alpha2+ lam2_bar**alpha2+ lam3_bar**alpha2- 3)
+        +2 * mu3 / alpha3**2* ( lam1_bar**alpha3+ lam2_bar**alpha3+ lam3_bar**alpha3- 3))
 
     # ------------------------------------------------------------------
     # Volumetric energy
     # ------------------------------------------------------------------
 
-    W_vol = (
-        (J - 1)**2 / D1
-        + (J - 1)**4 / D2
-        + (J - 1)**6 / D3
-    )
+    W_vol = ((J - 1)**2 / D1+ (J - 1)**4 / D2+ (J - 1)**6 / D3)
 
     W = sp.simplify(W_dev + W_vol)
 
@@ -143,49 +101,19 @@ def fit_exp_data_OgdenN3(data):
     # P22 = 0
     # ------------------------------------------------------------------
 
-    P1_uniax = sp.simplify(
-        P1.subs({
-            lam2: lamT,
-            lam3: lamT,
-        })
-    )
+    P1_uniax = sp.simplify(P1.subs({lam2: lamT,lam3: lamT,}))
 
-    P2_uniax = sp.simplify(
-        P2.subs({
-            lam2: lamT,
-            lam3: lamT,
-        })
-    )
+    P2_uniax = sp.simplify(P2.subs({lam2: lamT,lam3: lamT,}))
 
     # ------------------------------------------------------------------
     # Numerical functions
     # ------------------------------------------------------------------
 
-    arguments = (
-        lam1,
-        lamT,
-        mu1,
-        alpha1,
-        D1,
-        mu2,
-        alpha2,
-        D2,
-        mu3,
-        alpha3,
-        D3,
-    )
+    arguments = (lam1,lamT,mu1,alpha1,D1,mu2,alpha2,D2,mu3,alpha3,D3,)
 
-    P1_fun = sp.lambdify(
-        arguments,
-        P1_uniax,
-        modules="numpy",
-    )
+    P1_fun = sp.lambdify(arguments,P1_uniax,modules="numpy",)
 
-    P2_fun = sp.lambdify(
-        arguments,
-        P2_uniax,
-        modules="numpy",
-    )
+    P2_fun = sp.lambdify(arguments,P2_uniax,modules="numpy",)
 
     # ------------------------------------------------------------------
     # Parameter scaling
@@ -197,8 +125,7 @@ def fit_exp_data_OgdenN3(data):
         return (
             p[0], p[1], p[2] * 1e-9,
             p[3], p[4], p[5] * 1e-9,
-            p[6], p[7], p[8] * 1e-9,
-        )
+            p[6], p[7], p[8] * 1e-9,)
 
     # ------------------------------------------------------------------
     # Solve transverse stretch
@@ -207,12 +134,7 @@ def fit_exp_data_OgdenN3(data):
     def solve_transverse(lam, previous, params):
 
         def transverse_stress(lamT_value):
-
-            return P2_fun(
-                lam,
-                lamT_value,
-                *params,
-            )
+            return P2_fun(lam,lamT_value,*params,)
 
         # Normally the previous solution is an excellent starting point.
         try:
@@ -220,8 +142,7 @@ def fit_exp_data_OgdenN3(data):
                 transverse_stress,
                 x0=previous,
                 x1=previous * 1.001,
-                method="secant",
-            )
+                method="secant",)
 
             if solution.converged and solution.root > 0:
                 return solution.root
@@ -233,8 +154,7 @@ def fit_exp_data_OgdenN3(data):
         search = np.linspace(0.2, 2.0, 100)
         values = np.array([
             transverse_stress(x)
-            for x in search
-        ])
+            for x in search])
 
         for i in range(len(search) - 1):
 
@@ -251,8 +171,7 @@ def fit_exp_data_OgdenN3(data):
 
         raise RuntimeError(
             f"Could not solve transverse stretch at "
-            f"lambda1 = {lam:.6g}"
-        )
+            f"lambda1 = {lam:.6g}")
 
     # ------------------------------------------------------------------
     # Forward model
@@ -275,15 +194,13 @@ def fit_exp_data_OgdenN3(data):
             lambdaT = solve_transverse(
                 lam,
                 previous,
-                params,
-            )
+                params,)
 
             # First Piola-Kirchhoff stress
             P1_value = P1_fun(
                 lam,
                 lambdaT,
-                *params,
-            )
+                *params,)
 
             # Experimental stress is assumed to be nominal stress,
             # so compare directly with P1.
@@ -302,10 +219,7 @@ def fit_exp_data_OgdenN3(data):
 
         params = unpack_params(p)
 
-        _, sigma_pred = predict(
-            lambda1_exp,
-            params,
-        )
+        _, sigma_pred = predict(lambda1_exp,params,)
 
         return sigma_pred - sigma1_exp
 
@@ -341,12 +255,7 @@ def fit_exp_data_OgdenN3(data):
     # Least-squares fit
     # ------------------------------------------------------------------
 
-    result = least_squares(
-        residuals,
-        p0,
-        bounds=(lower, upper),
-        x_scale="jac",
-    )
+    result = least_squares(residuals,p0,bounds=(lower, upper),x_scale="jac",)
 
     if not result.success:
         raise RuntimeError(
@@ -359,8 +268,7 @@ def fit_exp_data_OgdenN3(data):
 
     fitted = unpack_params(result.x)
 
-    (
-        mu1_fit, alpha1_fit, D1_fit,
+    (   mu1_fit, alpha1_fit, D1_fit,
         mu2_fit, alpha2_fit, D2_fit,
         mu3_fit, alpha3_fit, D3_fit,
     ) = fitted
@@ -387,16 +295,13 @@ def fit_exp_data_OgdenN3(data):
 
     _, sigma_fit = predict(
         lambda1_exp,
-        fitted,
-    )
+        fitted,)
 
     fit_data = (
         lambda1_exp,
-        sigma_fit,
-    )
+        sigma_fit,)
 
     return fit_data, params
-
 
 def fit_exp_data_NH(data):
     """
@@ -439,42 +344,27 @@ def fit_exp_data_NH(data):
 
     if lambda1_exp.ndim != 1 or sigma1_exp.ndim != 1:
         raise ValueError(
-            "lambda1 and sigma1 must be 1D arrays."
-        )
+            "lambda1 and sigma1 must be 1D arrays.")
 
     if len(lambda1_exp) != len(sigma1_exp):
         raise ValueError(
-            "lambda1 and sigma1 must have the same length."
-        )
+            "lambda1 and sigma1 must have the same length.")
 
     if len(lambda1_exp) == 0:
         raise ValueError(
-            "Experimental data are empty."
-        )
+            "Experimental data are empty.")
 
     # ------------------------------------------------------------------
     # Symbolic model
     # ------------------------------------------------------------------
 
-    lam1, lam2, lam3 = sp.symbols(
-        "lam1 lam2 lam3",
-        positive=True,
-    )
+    lam1, lam2, lam3 = sp.symbols("lam1 lam2 lam3",positive=True,)
 
-    lamT = sp.symbols(
-        "lamT",
-        positive=True,
-    )
+    lamT = sp.symbols("lamT",positive=True,)
 
-    C10 = sp.symbols(
-        "C10",
-        positive=True,
-    )
+    C10 = sp.symbols("C10",positive=True,)
 
-    D1 = sp.symbols(
-        "D1",
-        positive=True,
-    )
+    D1 = sp.symbols("D1",positive=True,)
 
     J = lam1 * lam2 * lam3
 
@@ -490,18 +380,11 @@ def fit_exp_data_NH(data):
     # Neo-Hookean strain energy
     # ------------------------------------------------------------------
 
-    W_dev = 2 * C10 * (
-        lam1_bar**2
-        + lam2_bar**2
-        + lam3_bar**2
-        - 3
-    )
+    W_dev = 2 * C10 * (lam1_bar**2+ lam2_bar**2+ lam3_bar**2- 3)
 
     W_vol = (J - 1)**2 / D1
 
-    W = sp.simplify(
-        W_dev + W_vol
-    )
+    W = sp.simplify(W_dev + W_vol)
 
     # ------------------------------------------------------------------
     # First Piola-Kirchhoff stresses
@@ -517,44 +400,19 @@ def fit_exp_data_NH(data):
     # P22 = 0
     # ------------------------------------------------------------------
 
-    uniaxial_subs = {
-        lam2: lamT,
-        lam3: lamT,
-    }
+    uniaxial_subs = {lam2: lamT,lam3: lamT,}
 
-    P1_uniax = sp.simplify(
-        P1.subs(uniaxial_subs)
-    )
+    P1_uniax = sp.simplify(P1.subs(uniaxial_subs))
 
-    P2_uniax = sp.simplify(
-        P2.subs(uniaxial_subs)
-    )
+    P2_uniax = sp.simplify(P2.subs(uniaxial_subs))
 
     # ------------------------------------------------------------------
     # Numerical functions
     # ------------------------------------------------------------------
 
-    P1_fun = sp.lambdify(
-        (
-            lam1,
-            lamT,
-            C10,
-            D1,
-        ),
-        P1_uniax,
-        modules="numpy",
-    )
+    P1_fun = sp.lambdify((lam1,lamT,C10,D1,),P1_uniax,modules="numpy",)
 
-    P2_fun = sp.lambdify(
-        (
-            lam1,
-            lamT,
-            C10,
-            D1,
-        ),
-        P2_uniax,
-        modules="numpy",
-    )
+    P2_fun = sp.lambdify((lam1,lamT,C10,D1,),P2_uniax,modules="numpy",)
 
     # ------------------------------------------------------------------
     # Parameter scaling
@@ -572,20 +430,10 @@ def fit_exp_data_NH(data):
     # Solve traction-free transverse direction
     # ------------------------------------------------------------------
 
-    def solve_transverse(
-        lam,
-        previous,
-        C10_value,
-        D1_value,
-    ):
+    def solve_transverse(lam,previous,C10_value,D1_value,):
 
         def transverse_stress(lamT_value):
-            return P2_fun(
-                lam,
-                lamT_value,
-                C10_value,
-                D1_value,
-            )
+            return P2_fun(lam,lamT_value,C10_value,D1_value,)
 
         # First attempt: secant method using the previous solution.
         try:
@@ -593,8 +441,7 @@ def fit_exp_data_NH(data):
                 transverse_stress,
                 x0=previous,
                 x1=previous * 1.001,
-                method="secant",
-            )
+                method="secant",)
 
             if solution.converged and solution.root > 0:
                 return solution.root
@@ -606,13 +453,11 @@ def fit_exp_data_NH(data):
         search = np.linspace(
             0.2,
             2.0,
-            100,
-        )
+            100,)
 
         values = np.array([
             transverse_stress(x)
-            for x in search
-        ])
+            for x in search])
 
         for i in range(len(search) - 1):
 
@@ -624,16 +469,14 @@ def fit_exp_data_NH(data):
                         search[i],
                         search[i + 1],
                     ),
-                    method="brentq",
-                )
+                    method="brentq",)
 
                 if solution.converged:
                     return solution.root
 
         raise RuntimeError(
             f"Could not solve transverse stretch at "
-            f"lambda1 = {lam:.6g}"
-        )
+            f"lambda1 = {lam:.6g}")
 
     # ------------------------------------------------------------------
     # Forward model
@@ -643,16 +486,13 @@ def fit_exp_data_NH(data):
 
         lambda1_values = np.asarray(
             lambda1_values,
-            dtype=float,
-        )
+            dtype=float,)
 
         lambdaT_values = np.empty_like(
-            lambda1_values
-        )
+            lambda1_values)
 
         sigma_values = np.empty_like(
-            lambda1_values
-        )
+            lambda1_values)
 
         previous = 1.0
 
@@ -662,16 +502,14 @@ def fit_exp_data_NH(data):
                 lam,
                 previous,
                 C10_value,
-                D1_value,
-            )
+                D1_value,)
 
             # Nominal / first Piola-Kirchhoff stress.
             P1_value = P1_fun(
                 lam,
                 lambdaT,
                 C10_value,
-                D1_value,
-            )
+                D1_value,)
 
             sigma_values[i] = P1_value
 
@@ -742,63 +580,43 @@ def fit_exp_data_NH(data):
     # ------------------------------------------------------------------
 
     C10_fit, D1_fit = unpack_params(
-        result.x
-    )
+        result.x)
 
     params = {
         "C10": C10_fit,
         "D1": D1_fit,
-        "result": result,
-    }
+        "result": result,}
 
     # ------------------------------------------------------------------
     # Fitted curve
     # ------------------------------------------------------------------
 
-    _, sigma_fit = predict(
-        lambda1_exp,
-        C10_fit,
-        D1_fit,
-    )
+    _, sigma_fit = predict(lambda1_exp,C10_fit,D1_fit,)
 
-    fit_data = (
-        lambda1_exp,
-        sigma_fit,
-    )
+    fit_data = (lambda1_exp,sigma_fit,)
 
-    return fit_data#, params
+    return fit_data, params
 
 
 
-def plot_data(data1, data2):
+def plot_data(data_exp, data_fit):
     """
     Plot experimental and fitted uniaxial data.
 
     Parameters
     ----------
-    data1 : tuple
+    data_exp : tuple
         (lambda1, sigma1) experimental data.
 
-    data2 : tuple
+    data_fit : tuple
         (lambda1, sigma1) fitted data.
     """
 
     fig, ax = plt.subplots()
 
-    ax.plot(
-        data1[0],
-        data1[1],
-        "o",
-        label="Experiment",
-    )
+    ax.plot(data_exp[0],data_exp[1],"o",label="Experiment",)
 
-    ax.plot(
-        data2[0],
-        data2[1],
-        "-",
-        linewidth=3,
-        label="Ogden (N=3) fit",
-    )
+    ax.plot(data_fit[0],data_fit[1],"-",linewidth=3,label="Fit",)
 
     ax.set_xlabel(r"$\lambda_1$")
     ax.set_ylabel(r"$\sigma_1$")
@@ -822,7 +640,7 @@ def read_exp_data(filename):
     Tcut -= Tcut[0]
 
     #return np.column_stack((Lcut, Fcut, Tcut))
-    return [Lcut,Fcut,Tcut]
+    return (Lcut,Fcut,Tcut)
 
 def dimensioned_to_dimensionless(data,A0,L0):
     # L to lambda, lambda=L/L0
@@ -830,18 +648,20 @@ def dimensioned_to_dimensionless(data,A0,L0):
     return [(data[0]+L0)/L0,data[1]/A0]
 
 
-A0CYLMEAN=686.61
-L0CYLMEAN=30.23
-A0RECTMEAN=30.62
-L0RECTMEAN=25.00
+A0CYLMEAN=686.61e-6
+L0CYLMEAN=30.23e-3
+A0RECTMEAN=30.62e-6
+L0RECTMEAN=25.00e-3
 
 filename1 = BASE_DIR / "txtfiles" / "COMPR1.tab"
 exp_data = read_exp_data(filename1)
+print(f"exp data: {exp_data}")
 exp_data_dimless = dimensioned_to_dimensionless(exp_data,A0CYLMEAN,L0CYLMEAN)
-fit_params = fit_exp_data_NH(exp_data_dimless)
+print(f"exp data dimless: {exp_data_dimless}")
+fit_curve = fit_exp_data_NH(exp_data_dimless)[0]
+print(f"fit curve: {fit_curve}")
 
-plot_data(exp_data_dimless[0],exp_data_dimless[1])
-plot_data(fit_params[0],fit_params[1])
+plot_data(exp_data_dimless,fit_curve)
 
 
 
