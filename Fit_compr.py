@@ -10,29 +10,40 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
-def fit_exp_data_OgdenN3(data):
+import numpy as np
+import sympy as sp
+
+from scipy.optimize import least_squares, root_scalar
+
+
+
+def _fit_exp_data_Ogden(data, N, incompressible=False):
     """
-    Fit a compressible Ogden N=3 model to uniaxial experimental data.
+    Fit a compressible or incompressible Ogden N-term model.
 
     Parameters
     ----------
     data : tuple
-        Experimental data:
+        (lambda1, sigma1), 1D numpy arrays.
 
-            (lambda1, sigma1)
+    N : int
+        Number of Ogden terms.
 
-        where lambda1 and sigma1 are 1D numpy arrays.
+    incompressible : bool, default=False
+        If True, enforce lambda1 * lambda2 * lambda3 = 1.
+        If False, solve P22 = 0 using volumetric energy terms.
 
     Returns
     -------
     fit_data : tuple
-        Fitted data:
-
-            (lambda1, sigma1_fit)
+        (lambda1, sigma1_fit)
 
     params : dict
-        Fitted Ogden parameters.
+        Fitted material parameters and optimizer result.
     """
+
+    if N not in (1, 2, 3):
+        raise ValueError("N must be 1, 2, or 3.")
 
     lambda1_exp, sigma1_exp = data
 
@@ -48,120 +59,184 @@ def fit_exp_data_OgdenN3(data):
     if len(lambda1_exp) == 0:
         raise ValueError("Experimental data are empty.")
 
-    # ------------------------------------------------------------------
+    if not np.all(np.isfinite(lambda1_exp)) or not np.all(
+        np.isfinite(sigma1_exp)
+    ):
+        raise ValueError("Experimental data must be finite.")
+
+    if np.any(lambda1_exp <= 0):
+        raise ValueError("lambda1 values must be positive.")
+
+    # --------------------------------------------------------------
     # Symbolic variables
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
 
-    lam1, lam2, lam3 = sp.symbols("lam1 lam2 lam3",positive=True,)
+    lam1, lam2, lam3 = sp.symbols(
+        "lam1 lam2 lam3", positive=True
+    )
+    lamT = sp.symbols("lamT", positive=True)
 
-    lamT = sp.symbols("lamT",positive=True,)
+    mu = sp.symbols(f"mu1:{N + 1}", positive=True)
+    alpha = sp.symbols(f"alpha1:{N + 1}", positive=True)
 
-    mu1, mu2, mu3 = sp.symbols("mu1 mu2 mu3",positive=True,)
-
-    alpha1, alpha2, alpha3 = sp.symbols("alpha1 alpha2 alpha3",positive=True,)
-
-    D1, D2, D3 = sp.symbols("D1 D2 D3",positive=True,)
-
-    # ------------------------------------------------------------------
-    # Deformation
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Deformation and isochoric stretches
+    # --------------------------------------------------------------
 
     J = lam1 * lam2 * lam3
 
-    lam1_bar = lam1 * J**(-sp.Rational(1, 3))
-    lam2_bar = lam2 * J**(-sp.Rational(1, 3))
-    lam3_bar = lam3 * J**(-sp.Rational(1, 3))
+    lam_bar = (
+        lam1 * J**(-sp.Rational(1, 3)),
+        lam2 * J**(-sp.Rational(1, 3)),
+        lam3 * J**(-sp.Rational(1, 3)),
+    )
 
-    # ------------------------------------------------------------------
-    # Ogden deviatoric energy
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Deviatoric Ogden energy
+    # --------------------------------------------------------------
 
-    W_dev = (
-         2 * mu1 / alpha1**2* (lam1_bar**alpha1+ lam2_bar**alpha1+ lam3_bar**alpha1- 3 )
-        +2 * mu2 / alpha2**2* (lam1_bar**alpha2+ lam2_bar**alpha2+ lam3_bar**alpha2- 3)
-        +2 * mu3 / alpha3**2* ( lam1_bar**alpha3+ lam2_bar**alpha3+ lam3_bar**alpha3- 3))
+    W_dev = sum(
+        2 * mu[i] / alpha[i]**2
+        * (
+            sum(lam_bar[j]**alpha[i] for j in range(3))
+            - 3
+        )
+        for i in range(N)
+    )
 
-    # ------------------------------------------------------------------
-    # Volumetric energy
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Volumetric energy (compressible only)
+    # --------------------------------------------------------------
 
-    W_vol = ((J - 1)**2 / D1+ (J - 1)**4 / D2+ (J - 1)**6 / D3)
+    if incompressible:
+        W = W_dev
+    else:
+        D = sp.symbols(f"D1:{N + 1}", positive=True)
 
-    W = sp.simplify(W_dev + W_vol)
+        W_vol = sum(
+            (J - 1)**(2 * (i + 1)) / D[i]
+            for i in range(N)
+        )
 
-    # ------------------------------------------------------------------
-    # First Piola-Kirchhoff stresses
-    # ------------------------------------------------------------------
+        W = W_dev + W_vol
 
-    P1 = sp.diff(W, lam1)
-    P2 = sp.diff(W, lam2)
+    # --------------------------------------------------------------
+    # First Piola-Kirchhoff stress
+    # --------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Uniaxial boundary conditions
-    #
-    # lambda2 = lambda3 = lambdaT
-    # P22 = 0
-    # ------------------------------------------------------------------
+    P1_raw = sp.diff(W, lam1)
+    P2_raw = sp.diff(W, lam2)
 
-    P1_uniax = sp.simplify(P1.subs({lam2: lamT,lam3: lamT,}))
+    substitutions = {lam2: lamT, lam3: lamT}
 
-    P2_uniax = sp.simplify(P2.subs({lam2: lamT,lam3: lamT,}))
+    P1_uniax = P1_raw.subs(substitutions)
+    P2_uniax = P2_raw.subs(substitutions)
 
-    # ------------------------------------------------------------------
+    if incompressible:
+        # Eliminate pressure using P22 = 0:
+        #
+        # P11 = dW/dlambda1 - (lambdaT/lambda1)*dW/dlambda2
+        #
+        # lambdaT is fixed by lambda1*lambdaT**2 = 1.
+
+        P1_uniax = (
+            P1_uniax
+            - (lamT / lam1) * P2_uniax
+        )
+
+    # --------------------------------------------------------------
     # Numerical functions
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
 
-    arguments = (lam1,lamT,mu1,alpha1,D1,mu2,alpha2,D2,mu3,alpha3,D3,)
+    if incompressible:
+        arguments = (
+            lam1,
+            lamT,
+            *[
+                variable
+                for i in range(N)
+                for variable in (mu[i], alpha[i])
+            ],
+        )
+    else:
+        arguments = (
+            lam1,
+            lamT,
+            *[
+                variable
+                for i in range(N)
+                for variable in (mu[i], alpha[i], D[i])
+            ],
+        )
 
-    P1_fun = sp.lambdify(arguments,P1_uniax,modules="numpy",)
+    P1_fun = sp.lambdify(
+        arguments, P1_uniax, modules="numpy"
+    )
 
-    P2_fun = sp.lambdify(arguments,P2_uniax,modules="numpy",)
+    if not incompressible:
+        P2_fun = sp.lambdify(
+            arguments, P2_uniax, modules="numpy"
+        )
 
-    # ------------------------------------------------------------------
-    # Parameter scaling
-    #
-    # The optimizer works with D / 1e-9 rather than D directly.
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Parameter scaling and unpacking
+    # --------------------------------------------------------------
 
     def unpack_params(p):
-        return (
-            p[0], p[1], p[2] * 1e-9,
-            p[3], p[4], p[5] * 1e-9,
-            p[6], p[7], p[8] * 1e-9,)
+        fitted = []
 
-    # ------------------------------------------------------------------
+        for i in range(N):
+            if incompressible:
+                fitted.extend([
+                    p[2*i],
+                    p[2*i + 1],
+                ])
+            else:
+                fitted.extend([
+                    p[3*i],
+                    p[3*i + 1],
+                    p[3*i + 2] * 1e-9,
+                ])
+
+        return tuple(fitted)
+
+    # --------------------------------------------------------------
     # Solve transverse stretch
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
 
     def solve_transverse(lam, previous, params):
 
-        def transverse_stress(lamT_value):
-            return P2_fun(lam,lamT_value,*params,)
+        if incompressible:
+            return 1.0 / np.sqrt(lam)
 
-        # Normally the previous solution is an excellent starting point.
+        def transverse_stress(lamT_value):
+            return P2_fun(lam, lamT_value, *params)
+
         try:
             solution = root_scalar(
                 transverse_stress,
                 x0=previous,
                 x1=previous * 1.001,
-                method="secant",)
+                method="secant",
+            )
 
             if solution.converged and solution.root > 0:
                 return solution.root
 
-        except (ValueError, RuntimeError):
+        except (ValueError, RuntimeError, OverflowError):
             pass
 
-        # Robust fallback: search for a sign change.
         search = np.linspace(0.2, 2.0, 100)
         values = np.array([
-            transverse_stress(x)
-            for x in search])
+            transverse_stress(x) for x in search
+        ])
 
         for i in range(len(search) - 1):
-
-            if values[i] * values[i + 1] < 0:
-
+            if (
+                np.isfinite(values[i])
+                and np.isfinite(values[i + 1])
+                and values[i] * values[i + 1] < 0
+            ):
                 solution = root_scalar(
                     transverse_stress,
                     bracket=(search[i], search[i + 1]),
@@ -173,17 +248,17 @@ def fit_exp_data_OgdenN3(data):
 
         raise RuntimeError(
             f"Could not solve transverse stretch at "
-            f"lambda1 = {lam:.6g}")
+            f"lambda1 = {lam:.6g}"
+        )
 
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
     # Forward model
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
 
     def predict(lambda1_values, params):
 
         lambda1_values = np.asarray(
-            lambda1_values,
-            dtype=float,
+            lambda1_values, dtype=float
         )
 
         lambdaT_values = np.empty_like(lambda1_values)
@@ -192,413 +267,144 @@ def fit_exp_data_OgdenN3(data):
         previous = 1.0
 
         for i, lam in enumerate(lambda1_values):
-
             lambdaT = solve_transverse(
-                lam,
-                previous,
-                params,)
+                lam, previous, params
+            )
 
-            # First Piola-Kirchhoff stress
-            P1_value = P1_fun(
-                lam,
-                lambdaT,
-                *params,)
-
-            # Experimental stress is assumed to be nominal stress,
-            # so compare directly with P1.
-            sigma_values[i] = P1_value
+            sigma_values[i] = P1_fun(
+                lam, lambdaT, *params
+            )
 
             lambdaT_values[i] = lambdaT
             previous = lambdaT
 
         return lambdaT_values, sigma_values
 
-    # ------------------------------------------------------------------
-    # Residual function
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Residuals
+    # --------------------------------------------------------------
 
     def residuals(p):
-
         params = unpack_params(p)
-
-        _, sigma_pred = predict(lambda1_exp,params,)
-
+        _, sigma_pred = predict(lambda1_exp, params)
         return sigma_pred - sigma1_exp
 
-    # ------------------------------------------------------------------
-    # Initial guess
-    #
-    # D values are represented in units of 1e-9.
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Initial guesses and bounds
+    # --------------------------------------------------------------
 
-    p0 = np.array([
-        1e5, 1.0, 1.0,
-        1e5, 2.0, 1.0,
-        1e5, 3.0, 1.0,
-    ])
+    if incompressible:
+        p0 = np.array([
+            value
+            for i in range(N)
+            for value in (1e5, float(i + 1))
+        ])
 
-    # ------------------------------------------------------------------
-    # Bounds
-    # ------------------------------------------------------------------
+        lower = np.array([
+            value
+            for i in range(N)
+            for value in (1e3, 0.01)
+        ])
 
-    lower = np.array([
-        1e3,  0.01, 1e-3,
-        1e3,  0.01, 1e-3,
-        1e3,  0.01, 1e-3,
-    ])
+        upper = np.array([
+            value
+            for i in range(N)
+            for value in (1e7, 100.0)
+        ])
 
-    upper = np.array([
-        1e7, 100.0, 1e3,
-        1e7, 100.0, 1e3,
-        1e7, 100.0, 1e3,
-    ])
+    else:
+        p0 = np.array([
+            value
+            for i in range(N)
+            for value in (1e5, float(i + 1), 1.0)
+        ])
 
-    # ------------------------------------------------------------------
+        lower = np.array([
+            value
+            for i in range(N)
+            for value in (1e3, 0.01, 1e-3)
+        ])
+
+        upper = np.array([
+            value
+            for i in range(N)
+            for value in (1e7, 100.0, 1e3)
+        ])
+
+    # --------------------------------------------------------------
     # Least-squares fit
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
 
-    result = least_squares(residuals,p0,bounds=(lower, upper),x_scale="jac",)
+    result = least_squares(
+        residuals,
+        p0,
+        bounds=(lower, upper),
+        x_scale="jac",
+    )
 
     if not result.success:
         raise RuntimeError(
-            f"Ogden N=3 fit failed: {result.message}"
+            f"Ogden N={N} fit failed: {result.message}"
         )
 
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
     # Extract fitted parameters
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
 
     fitted = unpack_params(result.x)
 
-    (   mu1_fit, alpha1_fit, D1_fit,
-        mu2_fit, alpha2_fit, D2_fit,
-        mu3_fit, alpha3_fit, D3_fit,
-    ) = fitted
-
     params = {
-        "mu1": mu1_fit,
-        "alpha1": alpha1_fit,
-        "D1": D1_fit,
-
-        "mu2": mu2_fit,
-        "alpha2": alpha2_fit,
-        "D2": D2_fit,
-
-        "mu3": mu3_fit,
-        "alpha3": alpha3_fit,
-        "D3": D3_fit,
-
+        "incompressible": incompressible,
+        "N": N,
         "result": result,
     }
 
-    # ------------------------------------------------------------------
-    # Calculate fitted curve
-    # ------------------------------------------------------------------
+    for i in range(N):
+        if incompressible:
+            params[f"mu{i+1}"] = fitted[2*i]
+            params[f"alpha{i+1}"] = fitted[2*i + 1]
+        else:
+            params[f"mu{i+1}"] = fitted[3*i]
+            params[f"alpha{i+1}"] = fitted[3*i + 1]
+            params[f"D{i+1}"] = fitted[3*i + 2]
 
-    _, sigma_fit = predict(
-        lambda1_exp,
-        fitted,)
+    # --------------------------------------------------------------
+    # Fitted curve
+    # --------------------------------------------------------------
 
-    fit_data = (
-        lambda1_exp,
-        sigma_fit,)
+    _, sigma_fit = predict(lambda1_exp, fitted)
+
+    fit_data = (lambda1_exp, sigma_fit)
 
     return fit_data, params
+
+
+def fit_exp_data_OgdenN1(data, incompressible=False):
+    """Fit a compressible or incompressible Ogden N=1 model."""
+    return _fit_exp_data_Ogden(data, N=1, incompressible=incompressible)
+
+
+def fit_exp_data_OgdenN2(data, incompressible=False):
+    """Fit a compressible or incompressible Ogden N=2 model."""
+    return _fit_exp_data_Ogden(data, N=2, incompressible=incompressible)
+
+
+def fit_exp_data_OgdenN3(data, incompressible=False):
+    """Fit a compressible or incompressible Ogden N=3 model."""
+    return _fit_exp_data_Ogden(data, N=3, incompressible=incompressible)
+
+
 
 def fit_exp_data_OgdenN1(data):
-    """
-    Fit a compressible Ogden N=1 model to uniaxial experimental data.
+    """Fit a compressible Ogden N=1 model to uniaxial data."""
+    return _fit_exp_data_Ogden(data, N=1)
 
-    Parameters
-    ----------
-    data : tuple
-        Experimental data:
 
-            (lambda1, sigma1)
+def fit_exp_data_OgdenN2(data):
+    """Fit a compressible Ogden N=2 model to uniaxial data."""
+    return _fit_exp_data_Ogden(data, N=2)
 
-        where lambda1 and sigma1 are 1D numpy arrays.
 
-    Returns
-    -------
-    fit_data : tuple
-        Fitted data:
-
-            (lambda1, sigma1_fit)
-
-    params : dict
-        Fitted Ogden parameters.
-    """
-
-    lambda1_exp, sigma1_exp = data
-
-    lambda1_exp = np.asarray(lambda1_exp, dtype=float)
-    sigma1_exp = np.asarray(sigma1_exp, dtype=float)
-
-    if lambda1_exp.ndim != 1 or sigma1_exp.ndim != 1:
-        raise ValueError("lambda1 and sigma1 must be 1D arrays.")
-
-    if len(lambda1_exp) != len(sigma1_exp):
-        raise ValueError("lambda1 and sigma1 must have the same length.")
-
-    if len(lambda1_exp) == 0:
-        raise ValueError("Experimental data are empty.")
-
-    # ------------------------------------------------------------------
-    # Symbolic variables
-    # ------------------------------------------------------------------
-
-    lam1, lam2, lam3 = sp.symbols("lam1 lam2 lam3",positive=True,)
-
-    lamT = sp.symbols("lamT",positive=True,)
-
-    mu1, mu2, mu3 = sp.symbols("mu1 mu2 mu3",positive=True,)
-
-    alpha1, alpha2, alpha3 = sp.symbols("alpha1 alpha2 alpha3",positive=True,)
-
-    D1, D2, D3 = sp.symbols("D1 D2 D3",positive=True,)
-
-    # ------------------------------------------------------------------
-    # Deformation
-    # ------------------------------------------------------------------
-
-    J = lam1 * lam2 * lam3
-
-    lam1_bar = lam1 * J**(-sp.Rational(1, 3))
-    lam2_bar = lam2 * J**(-sp.Rational(1, 3))
-    lam3_bar = lam3 * J**(-sp.Rational(1, 3))
-
-    # ------------------------------------------------------------------
-    # Ogden deviatoric energy
-    # ------------------------------------------------------------------
-
-    W_dev = (
-         2 * mu1 / alpha1**2* (lam1_bar**alpha1+ lam2_bar**alpha1+ lam3_bar**alpha1- 3 )
-        +2 * mu2 / alpha2**2* (lam1_bar**alpha2+ lam2_bar**alpha2+ lam3_bar**alpha2- 3)
-        +2 * mu3 / alpha3**2* ( lam1_bar**alpha3+ lam2_bar**alpha3+ lam3_bar**alpha3- 3))
-
-    # ------------------------------------------------------------------
-    # Volumetric energy
-    # ------------------------------------------------------------------
-
-    W_vol = ((J - 1)**2 / D1+ (J - 1)**4 / D2+ (J - 1)**6 / D3)
-
-    W = sp.simplify(W_dev + W_vol)
-
-    # ------------------------------------------------------------------
-    # First Piola-Kirchhoff stresses
-    # ------------------------------------------------------------------
-
-    P1 = sp.diff(W, lam1)
-    P2 = sp.diff(W, lam2)
-
-    # ------------------------------------------------------------------
-    # Uniaxial boundary conditions
-    #
-    # lambda2 = lambda3 = lambdaT
-    # P22 = 0
-    # ------------------------------------------------------------------
-
-    P1_uniax = sp.simplify(P1.subs({lam2: lamT,lam3: lamT,}))
-
-    P2_uniax = sp.simplify(P2.subs({lam2: lamT,lam3: lamT,}))
-
-    # ------------------------------------------------------------------
-    # Numerical functions
-    # ------------------------------------------------------------------
-
-    arguments = (lam1,lamT,mu1,alpha1,D1,mu2,alpha2,D2,mu3,alpha3,D3,)
-
-    P1_fun = sp.lambdify(arguments,P1_uniax,modules="numpy",)
-
-    P2_fun = sp.lambdify(arguments,P2_uniax,modules="numpy",)
-
-    # ------------------------------------------------------------------
-    # Parameter scaling
-    #
-    # The optimizer works with D / 1e-9 rather than D directly.
-    # ------------------------------------------------------------------
-
-    def unpack_params(p):
-        return (
-            p[0], p[1], p[2] * 1e-9,
-            p[3], p[4], p[5] * 1e-9,
-            p[6], p[7], p[8] * 1e-9,)
-
-    # ------------------------------------------------------------------
-    # Solve transverse stretch
-    # ------------------------------------------------------------------
-
-    def solve_transverse(lam, previous, params):
-
-        def transverse_stress(lamT_value):
-            return P2_fun(lam,lamT_value,*params,)
-
-        # Normally the previous solution is an excellent starting point.
-        try:
-            solution = root_scalar(
-                transverse_stress,
-                x0=previous,
-                x1=previous * 1.001,
-                method="secant",)
-
-            if solution.converged and solution.root > 0:
-                return solution.root
-
-        except (ValueError, RuntimeError):
-            pass
-
-        # Robust fallback: search for a sign change.
-        search = np.linspace(0.2, 2.0, 100)
-        values = np.array([
-            transverse_stress(x)
-            for x in search])
-
-        for i in range(len(search) - 1):
-
-            if values[i] * values[i + 1] < 0:
-
-                solution = root_scalar(
-                    transverse_stress,
-                    bracket=(search[i], search[i + 1]),
-                    method="brentq",
-                )
-
-                if solution.converged:
-                    return solution.root
-
-        raise RuntimeError(
-            f"Could not solve transverse stretch at "
-            f"lambda1 = {lam:.6g}")
-
-    # ------------------------------------------------------------------
-    # Forward model
-    # ------------------------------------------------------------------
-
-    def predict(lambda1_values, params):
-
-        lambda1_values = np.asarray(
-            lambda1_values,
-            dtype=float,
-        )
-
-        lambdaT_values = np.empty_like(lambda1_values)
-        sigma_values = np.empty_like(lambda1_values)
-
-        previous = 1.0
-
-        for i, lam in enumerate(lambda1_values):
-
-            lambdaT = solve_transverse(
-                lam,
-                previous,
-                params,)
-
-            # First Piola-Kirchhoff stress
-            P1_value = P1_fun(
-                lam,
-                lambdaT,
-                *params,)
-
-            # Experimental stress is assumed to be nominal stress,
-            # so compare directly with P1.
-            sigma_values[i] = P1_value
-
-            lambdaT_values[i] = lambdaT
-            previous = lambdaT
-
-        return lambdaT_values, sigma_values
-
-    # ------------------------------------------------------------------
-    # Residual function
-    # ------------------------------------------------------------------
-
-    def residuals(p):
-
-        params = unpack_params(p)
-
-        _, sigma_pred = predict(lambda1_exp,params,)
-
-        return sigma_pred - sigma1_exp
-
-    # ------------------------------------------------------------------
-    # Initial guess
-    #
-    # D values are represented in units of 1e-9.
-    # ------------------------------------------------------------------
-
-    p0 = np.array([
-        1e5, 1.0, 1.0,
-        1e5, 2.0, 1.0,
-        1e5, 3.0, 1.0,
-    ])
-
-    # ------------------------------------------------------------------
-    # Bounds
-    # ------------------------------------------------------------------
-
-    lower = np.array([
-        1e3,  0.01, 1e-3,
-        1e3,  0.01, 1e-3,
-        1e3,  0.01, 1e-3,
-    ])
-
-    upper = np.array([
-        1e7, 100.0, 1e3,
-        1e7, 100.0, 1e3,
-        1e7, 100.0, 1e3,
-    ])
-
-    # ------------------------------------------------------------------
-    # Least-squares fit
-    # ------------------------------------------------------------------
-
-    result = least_squares(residuals,p0,bounds=(lower, upper),x_scale="jac",)
-
-    if not result.success:
-        raise RuntimeError(
-            f"Ogden N=3 fit failed: {result.message}"
-        )
-
-    # ------------------------------------------------------------------
-    # Extract fitted parameters
-    # ------------------------------------------------------------------
-
-    fitted = unpack_params(result.x)
-
-    (   mu1_fit, alpha1_fit, D1_fit,
-        mu2_fit, alpha2_fit, D2_fit,
-        mu3_fit, alpha3_fit, D3_fit,
-    ) = fitted
-
-    params = {
-        "mu1": mu1_fit,
-        "alpha1": alpha1_fit,
-        "D1": D1_fit,
-
-        "mu2": mu2_fit,
-        "alpha2": alpha2_fit,
-        "D2": D2_fit,
-
-        "mu3": mu3_fit,
-        "alpha3": alpha3_fit,
-        "D3": D3_fit,
-
-        "result": result,
-    }
-
-    # ------------------------------------------------------------------
-    # Calculate fitted curve
-    # ------------------------------------------------------------------
-
-    _, sigma_fit = predict(
-        lambda1_exp,
-        fitted,)
-
-    fit_data = (
-        lambda1_exp,
-        sigma_fit,)
-
-    return fit_data, params
 
 def fit_exp_data_NH(data):
     """
@@ -1014,9 +820,9 @@ exp_data2_ds = (downsample(exp_data2_dimless[0],20),downsample(exp_data2_dimless
 
 #plot_data(exp_data_dimless,exp_data_dimless,xlabel=r"lam,1",ylabel=r"Sigma,Pa")
 
-(fit_curve1,fit_params1) = fit_exp_data_NH(exp_data1_ds)
+(fit_curve1,fit_params1) = fit_exp_data_OgdenN3(exp_data1_ds)
 
-(fit_curve2,fit_params2) = fit_exp_data_NH(exp_data2_ds)
+(fit_curve2,fit_params2) = fit_exp_data_OgdenN3(exp_data2_ds)
 #print(f"fit curve: {fit_curve1}")
 print("---------------------")
 print(f"fit params1: {fit_params1}")
