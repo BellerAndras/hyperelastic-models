@@ -395,15 +395,6 @@ def fit_exp_data_OgdenN3(data, incompressible=False):
 
 
 
-def fit_exp_data_OgdenN1(data):
-    """Fit a compressible Ogden N=1 model to uniaxial data."""
-    return _fit_exp_data_Ogden(data, N=1)
-
-
-def fit_exp_data_OgdenN2(data):
-    """Fit a compressible Ogden N=2 model to uniaxial data."""
-    return _fit_exp_data_Ogden(data, N=2)
-
 
 
 def fit_exp_data_NH(data):
@@ -797,6 +788,14 @@ def downsample(data, n):
     idx = np.linspace(0, len(data) - 1, n).astype(int)
     return data[idx]
 
+def concatenate(data1,data2):
+    lam1_concatenated = np.concatenate((data1[0], data2[0]))
+    sigma1_concatenated = np.concatenate((data1[1], data2[1]))
+    idx = np.argsort(lam1_concatenated)
+    lam1_concatenated = lam1_concatenated[idx]
+    sigma1_concatenated = sigma1_concatenated[idx]
+    return (lam1_concatenated,sigma1_concatenated)
+
 A0CYLMEAN=686.61e-6
 L0CYLMEAN=30.23e-3
 A0RECTMEAN=30.62e-6
@@ -814,25 +813,36 @@ exp_data1_dimless = dimensioned_to_dimensionless(exp_data1,A0CYLMEAN,L0CYLMEAN)
 
 exp_data2_dimless = dimensioned_to_dimensionless(exp_data2,A0RECTMEAN,L0RECTMEAN)
 
+exp_data3 = concatenate(exp_data1_dimless,exp_data2_dimless)
+
 #downsampled data
 exp_data1_ds = (downsample(exp_data1_dimless[0],20),downsample(exp_data1_dimless[1],20))
 exp_data2_ds = (downsample(exp_data2_dimless[0],20),downsample(exp_data2_dimless[1],20))
-
+exp_data3_ds = (downsample(exp_data3[0],30),downsample(exp_data3[1],30))
 #plot_data(exp_data_dimless,exp_data_dimless,xlabel=r"lam,1",ylabel=r"Sigma,Pa")
 
-(fit_curve1,fit_params1) = fit_exp_data_OgdenN3(exp_data1_ds)
+(fit_curve1,fit_params1) = fit_exp_data_OgdenN3(exp_data1_ds,incompressible=True)
 
-(fit_curve2,fit_params2) = fit_exp_data_OgdenN3(exp_data2_ds)
+(fit_curve2,fit_params2) = fit_exp_data_OgdenN3(exp_data2_ds,incompressible=True)
+
+(fit_curve3,fit_params3) = fit_exp_data_OgdenN3(exp_data3_ds,incompressible=True)
+
+
 #print(f"fit curve: {fit_curve1}")
 print("---------------------")
 print(f"fit params1: {fit_params1}")
 print("---------------------")
 print(f"fit params2: {fit_params2}")
 print("---------------------")
+print(f"fit params3: {fit_params3}")
+print("---------------------")
 
 plot_data(exp_data1_ds,fit_curve1)
 
 plot_data(exp_data2_ds,fit_curve2)
+
+plot_data(exp_data3_ds,fit_curve3)
+
 
 
 
