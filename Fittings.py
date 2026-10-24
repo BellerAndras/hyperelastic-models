@@ -1,21 +1,13 @@
 ###Fitting experimental data to compressible hyperelastic models
 
-import numpy as np
-import sympy as sp
-import matplotlib.pyplot as plt
-
-from scipy.optimize import least_squares, root_scalar
-
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-
+import matplotlib.pyplot as plt
 import numpy as np
 import sympy as sp
-
 from scipy.optimize import least_squares, root_scalar
 
-
+BASE_DIR = Path(__file__).resolve().parent
 
 def _fit_exp_data_Ogden(data, N, incompressible=False):
     """
@@ -424,7 +416,6 @@ def fit_exp_data_NH(data):
 
     import numpy as np
     import sympy as sp
-
     from scipy.optimize import least_squares, root_scalar
 
     # ------------------------------------------------------------------
@@ -693,155 +684,38 @@ def fit_exp_data_NH(data):
 
 
 
-def plot_data(data_exp, data_fit=None,exp_name="exp"):
+def read_cut_data(filename):
+    """_summary_
     """
-    Plot experimental and fitted uniaxial data.
-
-    Parameters
-    ----------
-    data_exp : tuple
-        (lambda1, sigma1) experimental data.
-
-    data_fit : tuple
-        (lambda1, sigma1) fitted data.
-    """
-
-    fig, ax = plt.subplots()
-
-    ax.plot(data_exp[0],data_exp[1],"o",label=exp_name,)
-    if(data_fit!=None):
-        ax.plot(data_fit[0],data_fit[1],"-",linewidth=3,label="Fit",)
-
-    ax.set_xlabel(r"$\lambda_1$")
-    ax.set_ylabel(r"$\sigma_1$")
-    ax.legend()
-
-    plt.show()
-
-def read_exp_data_compr(filename):
-    data = np.loadtxt(filename,delimiter="\t",skiprows=3,
-        converters=lambda x: float(x.replace(",", ".")))
+    data = np.loadtxt(filename,delimiter="\t",skiprows=1)
+    L=data[:,0]
+    F=data[:,1]
     
-    L=data[:,1]
-    F=data[:,0]
-    T=data[:,2]
-    
-    l_min_pos = np.where(L>=5.0)[0][0]
-    l_max_pos = np.where(L==max(L))[0][0]
-
-    print(l_min_pos)
-    print(l_max_pos)
-
-    Lcut = L[l_min_pos:l_max_pos]
-    Fcut = F[l_min_pos:l_max_pos]
-    Tcut = T[l_min_pos:l_max_pos]
-
-    
+    return(L,F)
 
 
-    Lcut -= Lcut[0]
-    Lcut /= 1000#mm to m
-    
-    Fcut -= Fcut[0]
-    Tcut -= Tcut[0]
-
-    Lcut = -Lcut
-    Fcut = -Fcut
-
-    #return np.column_stack((Lcut, Fcut, Tcut))
-    return (Lcut,Fcut,Tcut)
-
-def read_exp_data_tens(filename):
-    data = np.loadtxt(filename,delimiter="\t",skiprows=3,
-            converters=lambda x: float(x.replace(",", ".")))
-    L=data[:,1]
-    F=data[:,0]
-    T=data[:,2]
-
-    L = -L
-
-    print(L[np.where(L==max(L))[0][0]])
-    l_max_pos = np.where(L==max(L))[0][0]
-
-    Lcut = L[0:l_max_pos]
-    Fcut = F[0:l_max_pos]
-    Tcut = T[0:l_max_pos]
-
-    print(Lcut[0])
-    print(Fcut[0])
-    Lcut -= Lcut[0]
-    Lcut /= 1000#mm to m
-    Fcut -= Fcut[0]
-    Tcut -= Tcut[0]
-
-    
-
-    return (Lcut,Fcut,Tcut)
 
 
-def dimensioned_to_dimensionless(data,A0,L0):
-    # L to lambda, lambda=L/L0
-    # F to sigma, sigma=F/A0
-    return (data[0]/L0+1,data[1]/A0)
 
-def downsample(data, n):
-    idx = np.linspace(0, len(data) - 1, n).astype(int)
-    return data[idx]
+exp_data = read_cut_data(BASE_DIR /"txtfiles" / "DATA_AVG_CONC.tab")
+exp_data_ds = read_cut_data(BASE_DIR /"txtfiles" / "DATA_AVG_DS_CONC.tab")
 
-def concatenate(data1,data2):
-    lam1_concatenated = np.concatenate((data1[0], data2[0]))
-    sigma1_concatenated = np.concatenate((data1[1], data2[1]))
-    idx = np.argsort(lam1_concatenated)
-    lam1_concatenated = lam1_concatenated[idx]
-    sigma1_concatenated = sigma1_concatenated[idx]
-    return (lam1_concatenated,sigma1_concatenated)
 
-A0CYLMEAN=686.61e-6
-L0CYLMEAN=30.23e-3
-A0RECTMEAN=30.62e-6
-L0RECTMEAN=25.00e-3
 
-filename1 = BASE_DIR / "txtfiles" / "COMPR1.tab"
-exp_data1 = read_exp_data_compr(filename1)
+(fit_curve,fit_params) = fit_exp_data_OgdenN3(exp_data_ds,incompressible=True)
 
-filename2 = BASE_DIR / "txtfiles" / "TENS1.tab"
-exp_data2 = read_exp_data_tens(filename2)
-
-#plot_data(exp_data,exp_data,xlabel=r"L,mm",ylabel=r"F,N")
-
-exp_data1_dimless = dimensioned_to_dimensionless(exp_data1,A0CYLMEAN,L0CYLMEAN)
-
-exp_data2_dimless = dimensioned_to_dimensionless(exp_data2,A0RECTMEAN,L0RECTMEAN)
-
-exp_data3 = concatenate(exp_data1_dimless,exp_data2_dimless)
-
-#downsampled data
-exp_data1_ds = (downsample(exp_data1_dimless[0],20),downsample(exp_data1_dimless[1],20))
-exp_data2_ds = (downsample(exp_data2_dimless[0],20),downsample(exp_data2_dimless[1],20))
-exp_data3_ds = (downsample(exp_data3[0],30),downsample(exp_data3[1],30))
-#plot_data(exp_data_dimless,exp_data_dimless,xlabel=r"lam,1",ylabel=r"Sigma,Pa")
-
-(fit_curve1,fit_params1) = fit_exp_data_OgdenN3(exp_data1_ds,incompressible=True)
-
-(fit_curve2,fit_params2) = fit_exp_data_OgdenN3(exp_data2_ds,incompressible=True)
-
-(fit_curve3,fit_params3) = fit_exp_data_OgdenN3(exp_data3_ds,incompressible=True)
 
 
 #print(f"fit curve: {fit_curve1}")
 print("---------------------")
-print(f"fit params1: {fit_params1}")
-print("---------------------")
-print(f"fit params2: {fit_params2}")
-print("---------------------")
-print(f"fit params3: {fit_params3}")
+print(f"fit params: {fit_params}")
 print("---------------------")
 
-plot_data(exp_data1_ds,fit_curve1)
 
-plot_data(exp_data2_ds,fit_curve2)
+plt.plot(exp_data[0],exp_data[1])
+plt.plot(fit_curve[0],fit_curve[1])
+plt.show()
 
-plot_data(exp_data3_ds,fit_curve3)
 
 
 
