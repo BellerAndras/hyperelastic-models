@@ -388,30 +388,28 @@ def fit_exp_data_OgdenN3(data, incompressible=False):
 
 
 
-
-def fit_exp_data_NH(data):
+def fit_exp_data_NH(data, incompressible=False):
     """
-    Fit a compressible Neo-Hookean model to uniaxial experimental data.
+    Fit a Neo-Hookean model to uniaxial experimental data.
 
     Parameters
     ----------
     data : tuple
-        Experimental data:
-
-            (lambda1, sigma1)
-
-        where lambda1 is the stretch and sigma1 is the nominal
-        (first Piola-Kirchhoff) stress.
+        Experimental data (lambda1, sigma1), where lambda1 is the stretch
+        and sigma1 is the nominal (first Piola-Kirchhoff) stress.
+    incompressible : bool, default False
+        False: compressible model, fits C10 and D1.
+        True:  incompressible model (J = 1), fits C10 only. The transverse
+               stretch is lambdaT = lambda1**(-1/2), so no root solving is
+               needed and the fit is much faster.
 
     Returns
     -------
     fit_data : tuple
-        Fitted data:
-
-            (lambda1, sigma1_fit)
-
+        (lambda1, sigma1_fit)
     params : dict
-        Fitted Neo-Hookean parameters.
+        Fitted parameters. "D1" is None for the incompressible model.
+        "lambdaT" holds the transverse stretches of the fitted curve.
     """
 
     import numpy as np
@@ -428,97 +426,82 @@ def fit_exp_data_NH(data):
     sigma1_exp = np.asarray(sigma1_exp, dtype=float)
 
     if lambda1_exp.ndim != 1 or sigma1_exp.ndim != 1:
-        raise ValueError(
-            "lambda1 and sigma1 must be 1D arrays.")
+        raise ValueError("lambda1 and sigma1 must be 1D arrays.")
 
     if len(lambda1_exp) != len(sigma1_exp):
-        raise ValueError(
-            "lambda1 and sigma1 must have the same length.")
+        raise ValueError("lambda1 and sigma1 must have the same length.")
 
     if len(lambda1_exp) == 0:
-        raise ValueError(
-            "Experimental data are empty.")
+        raise ValueError("Experimental data are empty.")
 
     # ------------------------------------------------------------------
     # Symbolic model
     # ------------------------------------------------------------------
 
-    lam1, lam2, lam3 = sp.symbols("lam1 lam2 lam3",positive=True,)
+    lam1, lam2, lam3 = sp.symbols("lam1 lam2 lam3", positive=True)
+    lamT = sp.symbols("lamT", positive=True)
+    C10 = sp.symbols("C10", positive=True)
+    D1 = sp.symbols("D1", positive=True)
 
-    lamT = sp.symbols("lamT",positive=True,)
+    if incompressible:
+        # J = 1 -> isochoric stretches equal the stretches themselves,
+        # and lam2 = lam3 = lam1**(-1/2) is substituted before
+        # differentiating. P2 = 0 then determines the pressure term,
+        # so P1 is simply dW/dlam1.
+        lam_t = lam1**(-sp.Rational(1, 2))
 
-    C10 = sp.symbols("C10",positive=True,)
+        W = 2 * C10 * (lam1**2 + 2 * lam_t**2 - 3)
 
-    D1 = sp.symbols("D1",positive=True,)
+        P1_uniax = sp.simplify(sp.diff(W, lam1))
 
-    J = lam1 * lam2 * lam3
+        P1_fun = sp.lambdify((lam1, C10), P1_uniax, modules="numpy")
+
+    else:
+        J = lam1 * lam2 * lam3
+
+        # Isochoric principal stretches
+        lam1_bar = lam1 * J**(-sp.Rational(1, 3))
+        lam2_bar = lam2 * J**(-sp.Rational(1, 3))
+        lam3_bar = lam3 * J**(-sp.Rational(1, 3))
+
+        # Neo-Hookean strain energy
+        W_dev = 2 * C10 * (lam1_bar**2 + lam2_bar**2 + lam3_bar**2 - 3)
+        W_vol = (J - 1)**2 / D1
+        W = sp.simplify(W_dev + W_vol)
+
+        # First Piola-Kirchhoff stresses
+        P1 = sp.diff(W, lam1)
+        P2 = sp.diff(W, lam2)
+
+        # Uniaxial conditions: lambda2 = lambda3 = lambdaT, P2 = 0
+        uniaxial_subs = {lam2: lamT, lam3: lamT}
+
+        P1_uniax = sp.simplify(P1.subs(uniaxial_subs))
+        P2_uniax = sp.simplify(P2.subs(uniaxial_subs))
+
+        P1_fun = sp.lambdify((lam1, lamT, C10, D1), P1_uniax, modules="numpy")
+        P2_fun = sp.lambdify((lam1, lamT, C10, D1), P2_uniax, modules="numpy")
 
     # ------------------------------------------------------------------
-    # Isochoric principal stretches
-    # ------------------------------------------------------------------
-
-    lam1_bar = lam1 * J**(-sp.Rational(1, 3))
-    lam2_bar = lam2 * J**(-sp.Rational(1, 3))
-    lam3_bar = lam3 * J**(-sp.Rational(1, 3))
-
-    # ------------------------------------------------------------------
-    # Neo-Hookean strain energy
-    # ------------------------------------------------------------------
-
-    W_dev = 2 * C10 * (lam1_bar**2+ lam2_bar**2+ lam3_bar**2- 3)
-
-    W_vol = (J - 1)**2 / D1
-
-    W = sp.simplify(W_dev + W_vol)
-
-    # ------------------------------------------------------------------
-    # First Piola-Kirchhoff stresses
-    # ------------------------------------------------------------------
-
-    P1 = sp.diff(W, lam1)
-    P2 = sp.diff(W, lam2)
-
-    # ------------------------------------------------------------------
-    # Uniaxial boundary conditions
+    # Parameter handling
     #
-    # lambda2 = lambda3 = lambdaT
-    # P22 = 0
-    # ------------------------------------------------------------------
-
-    uniaxial_subs = {lam2: lamT,lam3: lamT,}
-
-    P1_uniax = sp.simplify(P1.subs(uniaxial_subs))
-
-    P2_uniax = sp.simplify(P2.subs(uniaxial_subs))
-
-    # ------------------------------------------------------------------
-    # Numerical functions
-    # ------------------------------------------------------------------
-
-    P1_fun = sp.lambdify((lam1,lamT,C10,D1,),P1_uniax,modules="numpy",)
-
-    P2_fun = sp.lambdify((lam1,lamT,C10,D1,),P2_uniax,modules="numpy",)
-
-    # ------------------------------------------------------------------
-    # Parameter scaling
-    #
-    # The optimizer uses D1_scaled = D1 / 1e-9.
+    # Compressible:   p = [C10, D1 / 1e-9]
+    # Incompressible: p = [C10]
     # ------------------------------------------------------------------
 
     def unpack_params(p):
         C10_value = p[0]
-        D1_value = p[1] * 1e-9
-
+        D1_value = None if incompressible else p[1] * 1e-9
         return C10_value, D1_value
 
     # ------------------------------------------------------------------
-    # Solve traction-free transverse direction
+    # Solve traction-free transverse direction (compressible only)
     # ------------------------------------------------------------------
 
-    def solve_transverse(lam,previous,C10_value,D1_value,):
+    def solve_transverse(lam, previous, C10_value, D1_value):
 
         def transverse_stress(lamT_value):
-            return P2_fun(lam,lamT_value,C10_value,D1_value,)
+            return P2_fun(lam, lamT_value, C10_value, D1_value)
 
         # First attempt: secant method using the previous solution.
         try:
@@ -526,7 +509,8 @@ def fit_exp_data_NH(data):
                 transverse_stress,
                 x0=previous,
                 x1=previous * 1.001,
-                method="secant",)
+                method="secant",
+            )
 
             if solution.converged and solution.root > 0:
                 return solution.root
@@ -535,33 +519,21 @@ def fit_exp_data_NH(data):
             pass
 
         # Fallback: search for a bracketed root.
-        search = np.linspace(
-            0.2,
-            2.0,
-            100,)
-
-        values = np.array([
-            transverse_stress(x)
-            for x in search])
+        search = np.linspace(0.2, 2.0, 100)
+        values = np.array([transverse_stress(x) for x in search])
 
         for i in range(len(search) - 1):
-
             if values[i] * values[i + 1] < 0:
-
                 solution = root_scalar(
                     transverse_stress,
-                    bracket=(
-                        search[i],
-                        search[i + 1],
-                    ),
-                    method="brentq",)
-
+                    bracket=(search[i], search[i + 1]),
+                    method="brentq",
+                )
                 if solution.converged:
                     return solution.root
 
         raise RuntimeError(
-            f"Could not solve transverse stretch at "
-            f"lambda1 = {lam:.6g}")
+            f"Could not solve transverse stretch at lambda1 = {lam:.6g}")
 
     # ------------------------------------------------------------------
     # Forward model
@@ -569,34 +541,24 @@ def fit_exp_data_NH(data):
 
     def predict(lambda1_values, C10_value, D1_value):
 
-        lambda1_values = np.asarray(
-            lambda1_values,
-            dtype=float,)
+        lambda1_values = np.asarray(lambda1_values, dtype=float)
 
-        lambdaT_values = np.empty_like(
-            lambda1_values)
+        if incompressible:
+            lambdaT_values = lambda1_values**(-0.5)
+            sigma_values = P1_fun(lambda1_values, C10_value)
+            return lambdaT_values, np.asarray(sigma_values, dtype=float)
 
-        sigma_values = np.empty_like(
-            lambda1_values)
+        lambdaT_values = np.empty_like(lambda1_values)
+        sigma_values = np.empty_like(lambda1_values)
 
         previous = 1.0
 
         for i, lam in enumerate(lambda1_values):
 
-            lambdaT = solve_transverse(
-                lam,
-                previous,
-                C10_value,
-                D1_value,)
+            lambdaT = solve_transverse(lam, previous, C10_value, D1_value)
 
-            # Nominal / first Piola-Kirchhoff stress.
-            P1_value = P1_fun(
-                lam,
-                lambdaT,
-                C10_value,
-                D1_value,)
-
-            sigma_values[i] = P1_value
+            # Nominal / first Piola-Kirchhoff stress
+            sigma_values[i] = P1_fun(lam, lambdaT, C10_value, D1_value)
 
             lambdaT_values[i] = lambdaT
             previous = lambdaT
@@ -608,41 +570,22 @@ def fit_exp_data_NH(data):
     # ------------------------------------------------------------------
 
     def residuals(p):
-
         C10_value, D1_value = unpack_params(p)
-
-        _, sigma_pred = predict(
-            lambda1_exp,
-            C10_value,
-            D1_value,
-        )
-
+        _, sigma_pred = predict(lambda1_exp, C10_value, D1_value)
         return sigma_pred - sigma1_exp
 
     # ------------------------------------------------------------------
-    # Initial guess
-    #
-    # D1 is represented in units of 1e-9.
+    # Initial guess and bounds
     # ------------------------------------------------------------------
 
-    p0 = np.array([
-        2e5,    # C10
-        1.0,    # D1 / 1e-9
-    ])
-
-    # ------------------------------------------------------------------
-    # Bounds
-    # ------------------------------------------------------------------
-
-    lower = np.array([
-        1e3,    # C10
-        1e-3,   # D1 / 1e-9
-    ])
-
-    upper = np.array([
-        1e7,    # C10
-        1e3,    # D1 / 1e-9
-    ])
+    if incompressible:
+        p0 = np.array([2e5])        # C10
+        lower = np.array([1e3])
+        upper = np.array([1e7])
+    else:
+        p0 = np.array([2e5, 1.0])   # C10, D1 / 1e-9
+        lower = np.array([1e3, 1e-3])
+        upper = np.array([1e7, 1e3])
 
     # ------------------------------------------------------------------
     # Least-squares fit
@@ -656,29 +599,25 @@ def fit_exp_data_NH(data):
     )
 
     if not result.success:
-        raise RuntimeError(
-            f"Neo-Hookean fit failed: {result.message}"
-        )
+        raise RuntimeError(f"Neo-Hookean fit failed: {result.message}")
 
     # ------------------------------------------------------------------
-    # Fitted parameters
+    # Fitted parameters and curve
     # ------------------------------------------------------------------
 
-    C10_fit, D1_fit = unpack_params(
-        result.x)
+    C10_fit, D1_fit = unpack_params(result.x)
+
+    lambdaT_fit, sigma_fit = predict(lambda1_exp, C10_fit, D1_fit)
 
     params = {
         "C10": C10_fit,
         "D1": D1_fit,
-        "result": result,}
+        "lambdaT": lambdaT_fit,
+        "incompressible": incompressible,
+        "result": result,
+    }
 
-    # ------------------------------------------------------------------
-    # Fitted curve
-    # ------------------------------------------------------------------
-
-    _, sigma_fit = predict(lambda1_exp,C10_fit,D1_fit,)
-
-    fit_data = (lambda1_exp,sigma_fit,)
+    fit_data = (lambda1_exp, sigma_fit)
 
     return fit_data, params
 
@@ -702,18 +641,37 @@ exp_data_ds = read_cut_data(BASE_DIR /"txtfiles" / "DATA_AVG_DS_CONC.tab")
 
 
 
-(fit_curve,fit_params) = fit_exp_data_OgdenN3(exp_data_ds,incompressible=True)
+(fit_curve1,fit_params1) = fit_exp_data_OgdenN1(exp_data_ds,incompressible=True)
 
+(fit_curve2,fit_params2) = fit_exp_data_OgdenN2(exp_data_ds,incompressible=True)
+
+(fit_curve3,fit_params3) = fit_exp_data_OgdenN3(exp_data_ds,incompressible=True)
+
+(fit_curve4,fit_params4) = fit_exp_data_NH(exp_data_ds,incompressible=True)
 
 
 #print(f"fit curve: {fit_curve1}")
 print("---------------------")
-print(f"fit params: {fit_params}")
+print(f"fit params: {fit_params3}")
 print("---------------------")
 
+fig,ax = plt.subplots()
 
-plt.plot(exp_data[0],exp_data[1])
-plt.plot(fit_curve[0],fit_curve[1])
+ax.plot(exp_data[0],exp_data[1],label="Mérési adatsor",linewidth=2)
+
+ax.plot(fit_curve1[0],fit_curve1[1],label="Illesztett görbe, Elsőfokú Ogden",linewidth=2)
+ax.plot(fit_curve2[0],fit_curve2[1],label="Illesztett görbe, Másodfokú Ogden",linewidth=5,linestyle="--",color="purple")
+ax.plot(fit_curve3[0],fit_curve3[1],label="Illesztett görbe, Harmadfokú Ogden",linewidth=2)
+ax.plot(fit_curve4[0],fit_curve4[1],label="Illesztett görbe, Neo-Hooke",linewidth=2)
+
+ax.set_title("Paraméterek illesztése", fontsize=14)
+ax.set_xlabel(r"$\lambda$, 1", fontsize=12)
+ax.set_ylabel("$P$, Pa", fontsize=12)
+ax.grid()
+ax.legend(fontsize=14)
+
+
+
 plt.show()
 
 
